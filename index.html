@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HEXOS TCG - Game</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+    .card-widget {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100px;
+      height: 140px;
+      border: 2px solid #4a5568;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2d3748, #1a202c);
+      padding: 8px;
+      color: white;
+      text-align: center;
+      font-size: 10px;
+      font-weight: bold;
+    }
+    .card-widget.dino { border-color: #48bb78; }
+    .card-widget.rome { border-color: #ed8936; }
+    .card-widget.zeus { border-color: #9f7aea; }
+    @keyframes phaseTransition {
+      0% { opacity: 0; }
+      50% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    .phase-transition {
+      animation: phaseTransition 0.6s ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-white">
+  <div id="root"></div>
+
+  <script type="module">
+    // ============================================================
+    // HEXOS TCG - Standalone Game
+    // React + Tailwind + Engine (all inline)
+    // ============================================================
+
+    const e = React.createElement;
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ---- Game Manager (simplified bridge) ----
+    class GameManagerBridge {
+      constructor(p1Deck, p2Deck) {
+        this.workers = [];
+        this.eventListeners = [];
+        this.state = this.createInitialState(p1Deck, p2Deck);
+      }
+
+      static async load() {
+        // Dynamically load the engine from TypeScript compilation
+        // For now, we'll use a mock game loop
+        return new GameManagerBridge([], []);
+      }
+
+      createInitialState(p1Deck, p2Deck) {
+        return {
+          gameId: 'game_001',
+          turn: 1,
+          phase: 'STRATEGIC',
+          step: 'PLAYER_ACTION',
+          activePlayer: 'P1',
+          winner: null,
+          stack: [],
+          triggerQueue: [],
+          log: [
+            { type: 'SYSTEM', message: 'Game started! P1 goes first.' }
+          ],
+          players: {
+            P1: {
+              life: 8000,
+              hand: this.createMockHand('P1', 5),
+              field: [],
+              throne: this.createMockDeck('P1', 15),
+              pillar: [],
+              abyss: [],
+              seal: [
+                { instanceId: 'P1_SEAL_1', def: { displayName: 'Seal 1', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+                { instanceId: 'P1_SEAL_2', def: { displayName: 'Seal 2', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+                { instanceId: 'P1_SEAL_3', def: { displayName: 'Seal 3', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+              ],
+              ritosActivatedThisTurn: 0,
+              colossiSummonedThisTurn: 0,
+            },
+            P2: {
+              life: 8000,
+              hand: this.createMockHand('P2', 5),
+              field: [],
+              throne: this.createMockDeck('P2', 15),
+              pillar: [],
+              abyss: [],
+              seal: [
+                { instanceId: 'P2_SEAL_1', def: { displayName: 'Seal 1', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+                { instanceId: 'P2_SEAL_2', def: { displayName: 'Seal 2', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+                { instanceId: 'P2_SEAL_3', def: { displayName: 'Seal 3', type: 'SEAL', atk: 0, core: 0, shield: 0, keywords: [] }, zone: 'SEAL', counters: new Map() },
+              ],
+              ritosActivatedThisTurn: 0,
+              colossiSummonedThisTurn: 0,
+            }
+          }
+        };
+      }
+
+      createMockHand(player, count) {
+        const names = {
+          P1: ['Kreon, the Apocalypse', 'Tyros, the Ground-Breaker', 'Zenith, the Sky-Hunter', 'Predatore Fulmineo', 'Corridore delle Ceneri'],
+          P2: ['Aurelian, the Legislator', 'Tiberius, the Conqueror', 'Maximus, the Iron-Will', 'Questore della Legge', 'Intrappolatore del Circo']
+        };
+        const affinity = player === 'P1' ? 'DINO' : 'ROME';
+        const list = names[player] || [];
+        return list.slice(0, count).map((name, i) => ({
+          instanceId: `${player}_CARD_${i}`,
+          def: {
+            displayName: name,
+            type: i === 0 ? 'COLOSSUS' : 'VASSAL',
+            atk: 1500 + i * 200,
+            core: 800 + i * 100,
+            shield: 600 + i * 100,
+            affinity,
+            keywords: [],
+            abilities: []
+          },
+          zone: 'HAND',
+          position: 'ATTACK',
+          atk: 1500 + i * 200,
+          core: 800 + i * 100,
+          shield: 600 + i * 100,
+          keywords: new Set(),
+          counters: new Map(),
+          controller: player,
+          owner: player,
+          summonedThisTurn: false,
+          attackedThisTurn: false,
+          usedAbilities: new Set(),
+          modifiers: []
+        }));
+      }
+
+      createMockDeck(player, count) {
+        return Array.from({ length: count }).map((_, i) => ({
+          instanceId: `${player}_DECK_${i}`,
+          def: { displayName: `Card ${i}`, type: 'COLOSSUS', atk: 0, core: 0, shield: 0, affinity: 'DINO', keywords: [], abilities: [] },
+          zone: 'THRONE',
+          position: 'ATTACK',
+          controller: player,
+          owner: player,
+          atk: 0,
+          core: 0,
+          shield: 0,
+          keywords: new Set(),
+          counters: new Map(),
+          summonedThisTurn: false,
+          attackedThisTurn: false,
+          usedAbilities: new Set(),
+          modifiers: []
+        }));
+      }
+
+      processAction(action) {
+        const state = this.state;
+        const log = (msg, type = 'ACTION') => {
+          state.log.push({ type, message: msg });
+          if (state.log.length > 50) state.log.shift();
+        };
+
+        switch (action.type) {
+          case 'SUMMON': {
+            const player = state.players[state.activePlayer];
+            const card = player.hand.find(c => c.instanceId === action.instanceId);
+            if (card && state.phase === 'STRATEGIC' && state.activePlayer === 'P1') {
+              player.hand = player.hand.filter(c => c.instanceId !== action.instanceId);
+              card.zone = 'FIELD';
+              card.summonedThisTurn = true;
+              player.field.push(card);
+              log(`${state.activePlayer} summons ${card.def.displayName} in ${action.position} position`);
+              this.emit({ type: 'ACTION_PROCESSED', action });
+            }
+            break;
+          }
+          case 'ATTACK': {
+            if (state.phase === 'CONFLICT' && state.activePlayer === 'P1') {
+              const player = state.players[state.activePlayer];
+              const attacker = player.field.find(c => c.instanceId === action.attackerId);
+              if (attacker) {
+                attacker.attackedThisTurn = true;
+                log(`${state.activePlayer} declares attack: ${attacker.def.displayName} → ${action.targetId}`);
+                this.emit({ type: 'ACTION_PROCESSED', action });
+              }
+            }
+            break;
+          }
+          case 'PASS': {
+            // Auto-advance phases
+            switch (state.phase) {
+              case 'STRATEGIC':
+                state.phase = 'CONFLICT';
+                log(`--- CONFLICT PHASE (Turn ${state.turn}, ${state.activePlayer}) ---`, 'SYSTEM');
+                break;
+              case 'CONFLICT':
+              case 'TERMINAL':
+                // End turn
+                state.activePlayer = state.activePlayer === 'P1' ? 'P2' : 'P1';
+                if (state.activePlayer === 'P1') state.turn++;
+                state.phase = 'STRATEGIC';
+                log(`--- STRATEGIC PHASE (Turn ${state.turn}, ${state.activePlayer}) ---`, 'SYSTEM');
+                // Simulate P2 action
+                if (state.activePlayer === 'P2') {
+                  setTimeout(() => {
+                    this.processAction({ type: 'PASS' });
+                    this.emit({ type: 'STATE_CHANGED', state: this.state });
+                  }, 800);
+                }
+                break;
+            }
+            this.emit({ type: 'ACTION_PROCESSED', action });
+            break;
+          }
+        }
+        this.emit({ type: 'STATE_CHANGED', state: this.state });
+      }
+
+      emit(event) {
+        this.eventListeners.forEach(listener => listener(event));
+      }
+
+      onEvent(listener) {
+        this.eventListeners.push(listener);
+      }
+    }
+
+    // ---- React Components ----
+    function CardWidget({ card }) {
+      if (!card) return null;
+      const affinity = (card.def?.affinity || '').toLowerCase();
+      return e('div', { className: `card-widget ${affinity}` },
+        e('div', { className: 'font-bold text-xs' }, card.def?.displayName?.slice(0, 12) || 'Card'),
+        e('div', { className: 'text-xs mt-1' }, `⚔️ ${card.atk || 0}`),
+        e('div', { className: 'text-xs' }, `♡ ${card.core || 0}`)
+      );
+    }
+
+    function PlayerHand({ cards, onAction, disabled }) {
+      return e('div', { className: 'flex gap-2 overflow-x-auto pb-2' },
+        cards.map(card =>
+          e('div', { key: card.instanceId, className: 'flex-shrink-0' },
+            e('div', { className: 'cursor-pointer' },
+              e(CardWidget, { card }),
+              e('button', {
+                onClick: () => onAction({ type: 'SUMMON', instanceId: card.instanceId, position: 'ATTACK' }),
+                disabled,
+                className: `w-full mt-1 px-2 py-1 text-xs rounded ${disabled ? 'bg-gray-600 opacity-50' : 'bg-green-600 hover:bg-green-700'}`
+              }, 'Summon')
+            )
+          )
+        )
+      );
+    }
+
+    function PlayerField({ cards, isOwn, onAction, disabled, onAttackClick, selectingTarget }) {
+      return e('div', { className: 'grid grid-cols-3 gap-2' },
+        cards.map(card =>
+          e('div', { key: card.instanceId, className: 'relative' },
+            e(CardWidget, { card }),
+            isOwn && e('button', {
+              onClick: () => onAttackClick?.(card),
+              disabled: disabled || selectingTarget,
+              className: `absolute bottom-1 right-1 px-2 py-1 text-xs rounded ${disabled || selectingTarget ? 'bg-gray-600 opacity-50' : 'bg-red-600 hover:bg-red-700'}`
+            }, 'Atk')
+          )
+        ),
+        cards.length === 0 && e('div', { className: 'col-span-3 text-gray-400 text-sm' }, 'Empty')
+      );
+    }
+
+    function SealRow({ seals }) {
+      return e('div', { className: 'flex gap-2 justify-center items-center py-2' },
+        e('div', { className: 'text-xs font-semibold' }, `Seals (${seals.length}/3):`),
+        e('div', { className: 'flex gap-2' },
+          seals.map(seal =>
+            e('div', { key: seal.instanceId, className: 'w-12 h-16 border-2 border-red-400 rounded bg-gray-700 flex items-center justify-center text-xs' }, '🔒')
+          ),
+          ...Array.from({ length: Math.max(0, 3 - seals.length) }).map((_, i) =>
+            e('div', { key: `empty_${i}`, className: 'w-12 h-16 border-2 border-dashed border-gray-600 rounded bg-gray-800 flex items-center justify-center text-gray-500' }, '—')
+          )
+        )
+      );
+    }
+
+    function GameLog({ logs }) {
+      return e('div', { className: 'text-xs space-y-1 max-h-64 overflow-y-auto' },
+        logs.slice(-20).map((log, i) => {
+          const colors = { SYSTEM: 'text-gray-400', ACTION: 'text-blue-400', EFFECT: 'text-yellow-400', ERROR: 'text-red-400' };
+          return e('div', { key: i, className: colors[log.type] || 'text-white' }, `[${log.type}] ${log.message}`);
+        })
+      );
+    }
+
+    function GameBoard({ state, onAction, isCpuThinking }) {
+      const p1 = state.players.P1;
+      const p2 = state.players.P2;
+      const isPlayerTurn = state.activePlayer === 'P1';
+      const buttonsDisabled = !isPlayerTurn || isCpuThinking;
+      const [attackSelection, setAttackSelection] = useState(null);
+      const [phaseTransition, setPhaseTransition] = useState(false);
+      const prevPhaseRef = useRef(state.phase);
+
+      useEffect(() => {
+        if (prevPhaseRef.current !== state.phase) {
+          setPhaseTransition(true);
+          const timer = setTimeout(() => setPhaseTransition(false), 600);
+          prevPhaseRef.current = state.phase;
+          return () => clearTimeout(timer);
+        }
+      }, [state.phase]);
+
+      const handleAttackClick = (attacker) => {
+        if (buttonsDisabled) return;
+        setAttackSelection({ attackerId: attacker.instanceId, attacker });
+      };
+
+      const handleTargetSelect = (target) => {
+        if (!attackSelection) return;
+        let targetId = typeof target === 'string' ? `${target}:${p2.seal[0]?.instanceId || 'THRONE'}` : target.instanceId;
+        onAction({ type: 'ATTACK', attackerId: attackSelection.attackerId, targetId });
+        setAttackSelection(null);
+      };
+
+      return e('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-4' },
+        e('div', { className: 'lg:col-span-2 space-y-4' },
+          // P2 Field
+          e('div', { className: 'border border-red-500 rounded p-4 bg-gray-800' },
+            e('div', { className: 'flex justify-between items-center mb-2' },
+              e('h2', { className: 'text-xl font-bold' }, 'Opponent'),
+              e('div', { className: 'text-2xl font-bold' }, `♥ ${p2.life}`)
+            ),
+            e(PlayerField, {
+              cards: p2.field,
+              isOwn: false,
+              onAction,
+              disabled: buttonsDisabled,
+              selectingTarget: !!attackSelection
+            }),
+            e(SealRow, { seals: p2.seal })
+          ),
+          // Game Info
+          e('div', { className: 'border border-gray-500 rounded p-4 bg-gray-800 text-sm' },
+            e('div', { className: 'grid grid-cols-4 gap-2' },
+              e('div', {}, 'Turn: ', e('span', { className: 'font-bold' }, state.turn)),
+              e('div', {}, 'Phase: ', e('span', { className: 'font-bold' }, state.phase)),
+              e('div', {}, 'Step: ', e('span', { className: 'font-bold' }, state.step)),
+              e('div', {}, 'Active: ', e('span', { className: 'font-bold' }, state.activePlayer))
+            )
+          ),
+          // P1 Field
+          e('div', { className: 'border border-blue-500 rounded p-4 bg-gray-800' },
+            e('div', { className: 'flex justify-between items-center mb-2' },
+              e('h2', { className: 'text-xl font-bold' }, 'You'),
+              e('div', { className: 'text-2xl font-bold' }, `♥ ${p1.life}`)
+            ),
+            e(PlayerField, {
+              cards: p1.field,
+              isOwn: true,
+              onAction,
+              disabled: buttonsDisabled,
+              onAttackClick: handleAttackClick,
+              selectingTarget: !!attackSelection
+            })
+          ),
+          // P1 Seals
+          e('div', { className: 'border border-yellow-600 rounded p-4 bg-gray-800' },
+            e(SealRow, { seals: p1.seal })
+          ),
+          // Hand
+          e('div', { className: 'border border-green-500 rounded p-4 bg-gray-800' },
+            e('h3', { className: 'text-lg font-bold mb-2' }, `Hand (${p1.hand.length})`),
+            e(PlayerHand, { cards: p1.hand, onAction, disabled: buttonsDisabled })
+          ),
+          // Phase Transition
+          phaseTransition && e('div', { className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center pointer-events-none z-50 phase-transition' },
+            e('div', { className: 'text-white text-5xl font-bold drop-shadow-lg' }, `➜ ${state.phase}`)
+          ),
+          // Buttons
+          e('div', { className: 'flex gap-2' },
+            isCpuThinking && e('div', { className: 'px-4 py-2 bg-yellow-600 rounded text-sm font-semibold' }, '⏳ CPU thinking...'),
+            e('button', {
+              onClick: () => onAction({ type: 'PASS' }),
+              disabled: buttonsDisabled,
+              className: `px-6 py-2 rounded font-semibold ${buttonsDisabled ? 'bg-gray-600 opacity-50' : 'bg-blue-600 hover:bg-blue-700'}`
+            }, state.phase === 'TERMINAL' ? '✓ End Turn' : '▶ End Phase')
+          )
+        ),
+        // Log Panel
+        e('div', { className: 'border border-gray-500 rounded p-4 bg-gray-800 h-96 overflow-y-auto' },
+          e('h3', { className: 'text-lg font-bold mb-2' }, 'Log'),
+          e(GameLog, { logs: state.log })
+        )
+      );
+    }
+
+    function App() {
+      const [gameState, setGameState] = useState(null);
+      const [gm, setGm] = useState(null);
+      const [isCpuThinking, setIsCpuThinking] = useState(false);
+
+      useEffect(() => {
+        const bridge = new GameManagerBridge([], []);
+        setGm(bridge);
+        setGameState(bridge.state);
+        bridge.onEvent(event => {
+          if (event.type === 'STATE_CHANGED') {
+            setGameState({ ...event.state });
+          }
+        });
+      }, []);
+
+      const handleAction = (action) => {
+        if (!gm) return;
+        gm.processAction(action);
+      };
+
+      if (!gameState) return e('div', { className: 'p-4' }, 'Loading...');
+
+      return e('div', { className: 'min-h-screen bg-gray-900 text-white p-4' },
+        e('div', { className: 'max-w-7xl mx-auto' },
+          e('div', { className: 'flex justify-between items-center mb-4' },
+            e('h1', { className: 'text-3xl font-bold' }, 'HEXOS TCG'),
+            e('button', {
+              onClick: () => {
+                const bridge = new GameManagerBridge([], []);
+                setGm(bridge);
+                setGameState(bridge.state);
+              },
+              className: 'px-4 py-2 bg-green-600 hover:bg-green-700 rounded'
+            }, 'New Game')
+          ),
+          e(GameBoard, { state: gameState, onAction: handleAction, isCpuThinking })
+        )
+      );
+    }
+
+    // Render
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(e(App));
+  </script>
+</body>
+</html>
